@@ -1,26 +1,51 @@
 import os
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import requests
 
 app = Flask(__name__)
 
-# Lê a URL da variável de ambiente ao iniciar
+# Configurações via ENV
 TARGET_URL = os.environ.get('TARGET_URL')
-TIMEOUT = os.environ.get('TIMEOUT')
+TIMEOUT = float(os.environ.get('TIMEOUT', 10))
+# Captura o nome do pod atual
+POD_NAME = os.environ.get('HOSTNAME', 'pod-desconhecido')
 
-@app.route('/fetch', methods=['GET'])
-def fetch_from_env():
+@app.route('/fetch', methods=['GET', 'POST'])
+def fetch_and_forward():
     if not TARGET_URL:
-        return jsonify({"error": "A variável de ambiente 'TARGET_URL' não foi definida."}), 500
+        return jsonify({"error": "TARGET_URL não definida"}), 500
+
+    # 1. Prepara os Headers
+    excluded_headers = ['Host', 'Content-Length']
+    forward_headers = {k: v for k, v in request.headers if k not in excluded_headers}
+    
+    # 2. Lógica de Histórico do Cabeçalho
+    # Se o header já existir, movemos o valor para o 'X-Original'
+    existing_forward = request.headers.get('X-Forwarded-From-Pod')
+    if existing_forward:
+        forward_headers['X-Original-Forwarded-From-Pod'] = existing_forward
+
+    # 3. Adiciona o nome do Pod atual no header principal
+    forward_headers['X-Forwarded-From-Pod'] = POD_NAME
+
+    # 4. Captura o Body original
+    forward_data = request.get_data()
 
     try:
-        # Suporta tanto http quanto https automaticamente
-        response = requests.get(TARGET_URL, verify=False, timeout=TIMEOUT)
+        # 5. Faz a chamada ao destino
+        response = requests.request(
+            method=request.method,
+            url=TARGET_URL,
+            headers=forward_headers,
+            data=forward_data,
+            verify=False,
+            timeout=TIMEOUT
+        )
+
         return (response.content, response.status_code, response.headers.items())
-    
+
     except requests.exceptions.RequestException as e:
-        return jsonify({"error": f"Falha ao conectar em {TARGET_URL}: {str(e)}"}), 500
+        return jsonify({"error": "Falha no encaminhamento", "details": str(e)}), 500
 
 if __name__ == '__main__':
-    # O OpenShift geralmente usa a porta 8080 por padrão para usuários não-root
     app.run(host='0.0.0.0', port=8080)
