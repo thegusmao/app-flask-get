@@ -10,6 +10,11 @@ TIMEOUT = float(os.environ.get('TIMEOUT', 10))
 # Captura o nome do pod atual
 POD_NAME = os.environ.get('HOSTNAME', 'pod-desconhecido')
 
+HOP_BY_HOP = {
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailers", "transfer-encoding", "upgrade", "content-length", "content-encoding",
+}
+
 @app.route('/fetch', methods=['GET', 'POST'])
 def fetch_and_forward():
     if not TARGET_URL:
@@ -41,8 +46,13 @@ def fetch_and_forward():
             verify=False,
             timeout=TIMEOUT
         )
-
-        return (response.content, response.status_code, response.headers.items())
+        
+        safe_headers = [
+            (k, v) for k, v in response.headers.items()
+            if k.lower() not in HOP_BY_HOP
+        ]
+        
+        return (response.content, response.status_code, safe_headers)
 
     except requests.exceptions.RequestException as e:
         return jsonify({"error": "Falha no encaminhamento", "details": str(e)}), 500
